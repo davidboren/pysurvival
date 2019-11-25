@@ -115,75 +115,75 @@ class BaseMultiTaskModel(BaseModel):
         """ Given the survival_times, events and time_points vectors, 
             it returns a ndarray of the encodings for all units 
             such that:
-                Y = [[0, 0, 1, 0, 0],  # unit experienced an event at t = 3
-                     [0, 1, 0, 0, 0],  # unit experienced an event at t = 2
-                     [0, 1, 1, 1, 1],] # unit was censored at t = 2
-        """ 
+                Y = [[[0, 0, 1, 0, 0], # unit experienced event 1 at t = 3
+                     [0, 1, 0, 0, 0],  # unit experienced event 2 at t = 2
+                     [0, 1, 1, 1, 1],  # unit was censored at t = 2
+                     ], 
+                    [[0, 0, 1, 1, 1],  # unit was censored for event 2 at t = 2
+                     [0, 1, 1, 1, 1],  # unit was censored event 2 at t = 2
+                     [0, 1, 1, 1, 1],  # unit was censored for event 2 at t = 2
+                    ],]
+        """
+        num_event_types = max(E)
 
         # building times axis
         self.get_times(T, is_min_time_zero, extra_pct_time)
-        n_units  = T.shape[0]
-        
+        n_units = T.shape[0]
+
         # Initializing the output variable
-        Y_cens, Y_uncens = [], []
-        X_cens, X_uncens = [], []
+        X, Y = [], []
 
         # Building the output variable
-        for i, (t, e) in enumerate( zip(T, E) ):
-            y = np.zeros(self.num_times+1)
-            min_abs_value = [abs(a_j_1-t) for (a_j_1, a_j) in self.time_buckets]
+        for i, (t, e) in enumerate(zip(T, E)):
+            y = np.zeros((num_event_types, self.num_times + 1))
+            min_abs_value = [abs(a_j_1 - t) for (a_j_1, a_j) in self.time_buckets]
             index = np.argmin(min_abs_value)
 
-            if e == 1:
-                y[index] = 1.
-                X_uncens.append( X[i, :].tolist() )
-                Y_uncens.append( y.tolist() )
-
-            else:                
-                y[(index):] = 1.
-                X_cens.append( X[i, :].tolist() )
-                Y_cens.append( y.tolist() )
+            if e != 0:
+                y[e - 1][index] = 1.0
+                for j in range(num_event_types):
+                    if j != e - 1:
+                        y[j][(index):] = 1.0
+                X.append(X[i, :].tolist())
+                Y.append(y)
+            else:
+                for j in range(num_event_types):
+                    y[j][(index):] = 1.0
+                X.append(X[i, :].tolist())
+                Y.append(y)
 
         # Transform into torch.Tensor
-        X_cens = torch.FloatTensor(X_cens)
-        X_uncens = torch.FloatTensor(X_uncens)
-        Y_cens = torch.FloatTensor(Y_cens)
-        Y_uncens = torch.FloatTensor(Y_uncens)
+        X = torch.FloatTensor(X)
+        Y = torch.FloatTensor(Y)
 
-        return X_cens, X_uncens, Y_cens, Y_uncens 
-        
+        return X, Y
 
-    def loss_function(self, model, X_cens, X_uncens, Y_cens, Y_uncens, 
-        Triangle, l2_reg, l2_smooth):
+    def loss_function(self, model, X, Y, Triangle, l2_reg, l2_smooth):
         """ Computes the loss function of the any MTLR model. 
             All the operations have been vectorized to ensure optimal speed
         """
+        # Y = torch.FloatTensor(
+        #     np.array(
+        #         [
+        #             [[0, 0, 0], [1, 0, 0], [1, 0, 0], [1, 1, 1]],
+        #             [[0, 0, 0], [0, 0, 0], [0, 1, 1], [1, 1, 1]],
+        #         ],
+        #         dtype=np.float32,
+        #     )
+        # )
+        # Y_censoring = torch.FloatTensor(
+        #     np.array([[1, 0, 0], [0, 1, 1]], dtype=np.float32)
+        # )
+        # score = torch.FloatTensor(np.ones((2, 3, 4), dtype=np.float32) * 2)
+        # Triangle = torch.FloatTensor(np.tril(np.ones((2, 4, 4), dtype=np.float32)))
 
-        # Likelihood Calculations -- Uncensored
-        score_uncens = model(X_uncens)
-        phi_uncens = torch.exp( torch.mm(score_uncens, Triangle) )
-        reduc_phi_uncens = torch.sum(phi_uncens*Y_uncens, dim = 1)
-
-        # Likelihood Calculations -- Censored
-        score_cens = model(X_cens)
-        phi_cens = torch.exp( torch.mm(score_cens, Triangle) )
-        reduc_phi_cens = torch.sum( phi_cens*Y_cens, dim = 1)
-
-        # Likelihood Calculations -- Normalization
-        z_uncens = torch.exp( torch.mm(score_uncens, Triangle) )
-        reduc_z_uncens = torch.sum( z_uncens, dim = 1)
-
-        z_cens = torch.exp( torch.mm(score_cens, Triangle) )
-        reduc_z_cens = torch.sum( z_cens, dim = 1)
+        score = model(X)
+        phi = torch.exp(torch.einsum("cab,cbd->cad", (score, Triangle)))
+        norm = torch.einsum("cad,cbd->ca", (phi, Triangle))
+        reduc_phi = torch.einsum("cad,cda->ca", (phi, Y))
 
         # MTLR cost function
-        loss = - (
-                    torch.sum( torch.log(reduc_phi_uncens) ) \
-                  + torch.sum( torch.log(reduc_phi_cens) )  \
-
-                  - torch.sum( torch.log(reduc_z_uncens) ) \
-                  - torch.sum( torch.log(reduc_z_cens) ) 
-                 )
+        loss = torch.sum(torch.log(reduc_phi)) - torch.sum(torch.log(norm))
 
         # Adding the regularized loss
         nb_set_parameters = len(list(model.parameters()))
