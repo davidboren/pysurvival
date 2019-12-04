@@ -162,14 +162,9 @@ class BaseMultiTaskModel(BaseModel):
             subScore = score[:, ((self.num_times + 1) * i) : ((self.num_times + 1) * (i + 1))]
             subY = Y[:, ((self.num_times + 1) * i) : ((self.num_times + 1) * (i + 1))]
             phi = torch.exp(torch.mm(subScore, Triangle))
-            # phi_reduced = phi_reduced + torch.sum(phi * subY, dim = 1)
             phi_reduced = torch.sum(phi * subY, dim = 1)
-            # norm = norm + torch.sum(torch.mm(phi, subTri), dim=1)
             norm = torch.sum(torch.mm(phi, Triangle), dim=1)
-
             loss = - torch.sum(torch.log(phi_reduced)) + torch.sum(torch.log(norm))
-        # loss = - torch.sum(torch.log(phi_reduced)) + torch.sum(torch.log(norm))
-
 
         # Adding the regularized loss
         nb_set_parameters = len(list(model.parameters()))
@@ -406,10 +401,6 @@ class BaseMultiTaskModel(BaseModel):
         score_torch = self.model(x)
         score = score_torch.data.numpy()
                 
-        phis = []
-        # norm = np.zeros((x.shape[0], self.num_times+1), dtype=np.float32)
-        norm = np.zeros((x.shape[0]), dtype=np.float32)
-
         densities = []
         hazards = []
         Incidences = []
@@ -421,12 +412,9 @@ class BaseMultiTaskModel(BaseModel):
             subScore = score[:, (self.num_times + 1) * i : (self.num_times + 1) * (i + 1)]
             phi = np.exp(np.matmul(subScore, Triangle))
 
-            # phis.append(phi)
-            # norm += np.sum(phi, axis=1)
-
             norm = np.sum(phi, axis=1)
             density = (phi.T / norm).T
-            Survival = np.dot(density, Triangle)
+            Survival = np.matmul(density, Triangle)
             # hazard = density[:, :]/Survival[:, :]
             hazard = density[:, :-1]/Survival[:, 1:]
             densities.append(density)
@@ -435,36 +423,13 @@ class BaseMultiTaskModel(BaseModel):
             hazards.append(hazard)
 
 
-
-            # div = np.repeat(np.sum(phi, 1).reshape(-1, 1), phi.shape[1], axis=1)
-            # norm += div
-
-            
-        # for phi in phis:
-        #     density = (phi.T / norm).T
-        #     Survival = np.dot(density, Triangle)
-        #     # hazard = density[:, :]/Survival[:, :]
-        #     hazard = density[:, :-1]/Survival[:, 1:]
-
-        #     densities.append(density)
-        #     hazards.append(hazard)
-        #     Survivals.append(Survival)
-        #     Incidences.append(1-Survival)
-
-            # Incidences.append((1 - np.matmul(phi, subTri).T / norm).T)
-           
-            #     lambda dens: reduce(lambda a, b: a + [a[-1] + b], dens, [0])[1:],
-            #     axis=1,
-            #     arr=density[-1],
-            # ))
-
         # Returning the full functions of just one time point
         if t is None:
-            return None, densities, Incidences
+            return None, densities, Survivals
         else:
             min_abs_value = [abs(a_j_1-t) for (a_j_1, a_j) in self.time_buckets]
             index = np.argmin(min_abs_value)
-            return None, density[:, :, index], Incidence[:, :, index]
+            return None, [s[:,index] for s in densities], [s[:,index] for s in Survivals]
 
 
     def predict_risk(self, x, use_log=False):
