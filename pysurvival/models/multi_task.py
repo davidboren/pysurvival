@@ -141,7 +141,7 @@ class BaseMultiTaskModel(BaseModel):
                 y[int((self.num_times + 1) * (e-1) + index)] = 1.0
             for j in range(self.num_event_types):
                 if j != e - 1 or e == 0:
-                    y[(self.num_times + 1) * (j) + index: ] = 1.0
+                    y[(self.num_times + 1) * (j) + index: (self.num_times + 1) * (j+1)] = 1.0
             Y.append(y)
 
         # Transform into torch.Tensor
@@ -150,21 +150,21 @@ class BaseMultiTaskModel(BaseModel):
 
         return X, Y
 
-    def loss_function(self, model, X, Y, Triangle, l2_reg, l2_smooth):
+    def loss_function(self, model, X, Y, Triangle, Y_universe, l2_reg, l2_smooth):
         """ Computes the loss function of the any MTLR model. 
             All the operations have been vectorized to ensure optimal speed
         """
         score = model(X)
         loss = 0
-        norm = torch.FloatTensor(np.zeros((X.shape[0]), dtype=np.float32))
-        phi_reduced = torch.FloatTensor(np.zeros((X.shape[0]), dtype=np.float32))
+        phis = []
         for i in range(self.num_event_types):
-            subScore = score[:, ((self.num_times + 1) * i) : ((self.num_times + 1) * (i + 1))]
+            subScore = score[:, (self.num_times * i) : ((self.num_times) * (i + 1))]
             subY = Y[:, ((self.num_times + 1) * i) : ((self.num_times + 1) * (i + 1))]
-            phi = torch.exp(torch.mm(subScore, Triangle))
-            phi_reduced = torch.sum(phi * subY, dim = 1)
-            norm = torch.sum(torch.mm(phi, Triangle), dim=1)
-            loss = - torch.sum(torch.log(phi_reduced)) + torch.sum(torch.log(norm))
+            phis.append(torch.exp(torch.mm(subScore, Triangle)))
+
+        phi = torch.cat(phis, 1)
+        phi_reduced = torch.sum(phi * Y, dim = 1)
+        loss = - torch.sum(torch.log(phi_reduced)) + torch.sum(torch.log(torch.sum(torch.matmul(phi, Y_universe), dim = 1)))
 
         # Adding the regularized loss
         nb_set_parameters = len(list(model.parameters()))
@@ -338,31 +338,43 @@ class BaseMultiTaskModel(BaseModel):
         X, Y = self.compute_XY(X, T, E, is_min_time_zero, extra_pct_time)
 
         # Initializing the model
-        model = nn.NeuralNet(input_shape, (self.num_times + 1) * self.num_event_types, self.structure, 
+        model = nn.NeuralNet(input_shape, (self.num_times) * self.num_event_types, self.structure, 
                              init_method, dropout, batch_normalization, 
                              bn_and_dropout )
 
 
         # Creating the Triangular matrix
-        Triangle = torch.FloatTensor(np.tri(self.num_times+1, self.num_times + 1 ))
+        Triangle = torch.FloatTensor(np.tri(self.num_times, self.num_times + 1 ))
+        Triangle2 = torch.FloatTensor(np.tri(self.num_times + 1, self.num_times + 1 ))
+
+        # Triangle = torch.FloatTensor(np.triu(np.ones((self.num_times, self.num_times + 1 ), dtype=np.float64)))
+        # Triangle2 = torch.FloatTensor(np.triu(np.ones((self.num_times + 1, self.num_times + 1 ), dtype=np.float64)))
+
+        ones = np.ones((self.num_times + 1, self.num_times + 1))
+        diagonal = np.diag(ones.diagonal())
+        Y_universe = torch.FloatTensor(np.concatenate(
+                [
+                np.concatenate([Triangle2
+                                if i != j
+                                else diagonal
+                                for j in range(self.num_event_types)] , 1)
+                for i in range(self.num_event_types)
+                ],
+                0
+            )
+        )
 
         # Performing order 1 optimization
         model, loss_values = opt.optimize(self.loss_function, model, optimizer, 
             lr, num_epochs, verbose,  X=X, 
             Y=Y, Triangle=Triangle, 
-            l2_reg=l2_reg, l2_smooth=l2_smooth)
+            l2_reg=l2_reg, l2_smooth=l2_smooth, Y_universe=Y_universe)
 
         # Saving attributes
         self.model = model.eval()
         self.loss_values = loss_values
 
         return self
-
-    def get_triangle(self):
-        Triangle = torch.FloatTensor(np.tri(self.num_times + 1, self.num_times + 1, dtype=np.float32))
-        for i in range(self.num_event_types - 1):
-            Triangle = torch.cat((Triangle, torch.FloatTensor(np.tri(self.num_times + 1, self.num_times + 1, dtype=np.float32))), 0)
-        return Triangle.numpy()
     
 
     def predict(self, x, t = None):
@@ -401,26 +413,56 @@ class BaseMultiTaskModel(BaseModel):
         score_torch = self.model(x)
         score = score_torch.data.numpy()
                 
+        norm = np.zeros((x.shape[0]), dtype=np.float64)
+
+        phis = []
         densities = []
         hazards = []
         Incidences = []
         Survivals = []
 
         # Calculating the score, density, hazard and Survival
-        Triangle = np.tri(self.num_times+1, self.num_times + 1 )
-        for i in range(self.num_event_types):
-            subScore = score[:, (self.num_times + 1) * i : (self.num_times + 1) * (i + 1)]
-            phi = np.exp(np.matmul(subScore, Triangle))
+        Triangle1 = np.tri(self.num_times, self.num_times + 1 )
+        Triangle2 = np.tri(self.num_times + 1, self.num_times + 1 )
 
-            norm = np.sum(phi, axis=1)
-            density = (phi.T / norm).T
-            Survival = np.matmul(density, Triangle)
-            # hazard = density[:, :]/Survival[:, :]
-            hazard = density[:, :-1]/Survival[:, 1:]
-            densities.append(density)
+        # Triangle1 = np.triu(np.ones((self.num_times, self.num_times + 1 ), dtype=np.float64))
+        # Triangle2 = np.triu(np.ones((self.num_times + 1, self.num_times + 1 ), dtype=np.float64))
+
+        # A Score for a given time-bucket and outcome is comprised of the scores for that time bucket as well as
+        # the censoring scores for all other time buckets
+        phis = []
+        ones = np.ones((self.num_times + 1, self.num_times + 1))
+        diagonal = np.diag(ones.diagonal())
+        Effective_Y = np.concatenate(
+            [
+            np.concatenate([Triangle2
+                            if  i != j
+                            else diagonal
+                            for j in range(self.num_event_types)] , 1)
+            for i in range(self.num_event_types)
+            ],
+            0
+        )
+            
+        for i in range(self.num_event_types):
+            subScore = score[:, (self.num_times * i) : ((self.num_times) * (i + 1))]
+            phis.append(np.exp(np.matmul(subScore, Triangle1)))
+
+        final_phi = np.concatenate(phis, 1)
+        final_scores = np.matmul(final_phi, Effective_Y)
+        norm = np.sum(final_scores, axis=1)
+        density = (final_scores.T / norm).T
+
+        for i in range(self.num_event_types):
+            subDensity = density[:, ((self.num_times + 1) * i) : ((self.num_times + 1) * (i + 1))]
+            Incidence = np.matmul(subDensity, np.triu(np.ones((self.num_times + 1, self.num_times + 1 ), dtype=np.float64) ))
+            Survival = 1 - Incidence
+            # hazard = density[:, :-1]/Survival[:, 1:]
+
+            densities.append(subDensity)
             Survivals.append(Survival)
-            Incidences.append(1-Survival)
-            hazards.append(hazard)
+            Incidences.append(Incidence)
+            # hazards.append(hazard)
 
 
         # Returning the full functions of just one time point
