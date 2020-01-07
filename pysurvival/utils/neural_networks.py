@@ -395,20 +395,20 @@ class NeuralNet(nn.Module):
 class ParametricNet(torch.nn.Module):
     """ Underlying Pytorch model powering the Parametric models """
 
-    def __init__(self, num_features, init_method, init_alpha=1., 
+    def __init__(self, num_features, init_method, num_outcomes, init_alpha=1.,
         is_beta_used = True):
         super(ParametricNet, self).__init__()
 
         # weights
-        W = torch.randn(num_features, 1) 
+        W = torch.randn(num_features, num_outcomes)
         self.W = opt.initialization(init_method, W)
 
-        one =  torch.FloatTensor(np.array([1]))/init_alpha
+        one =  torch.FloatTensor(np.array([1] * num_outcomes))/init_alpha
         self.alpha = torch.nn.Parameter( one ) 
 
         self.is_beta_used = is_beta_used
         if self.is_beta_used:
-            one =  torch.FloatTensor(np.array([1.001]))/init_alpha
+            one =  torch.FloatTensor(np.array([1.001] * num_outcomes))/init_alpha
             self.beta = torch.nn.Parameter( one ) 
 
     def forward(self, x):

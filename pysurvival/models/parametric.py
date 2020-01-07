@@ -85,7 +85,9 @@ class BaseParametricModel(BaseModel):
         # Loss function calculations
         hazard = torch.max(hazard, torch.FloatTensor([1e-6]))
         Survival = torch.max(Survival, torch.FloatTensor([1e-6]))
-        loss = - torch.sum( E*torch.log(hazard) + torch.log(Survival) ) 
+        loss = - torch.sum( torch.log(Survival) )
+        for event in range(self.num_event_types):
+            loss -= torch.sum( E[:, event]*torch.log(hazard[:, event]) ) 
 
         # Adding the regularized loss
         for w in model.parameters():
@@ -222,6 +224,8 @@ class BaseParametricModel(BaseModel):
         """
         
         # Checking data format (i.e.: transforming into numpy array)
+        self.num_event_types = int(max(E))
+
         X, T, E = utils.check_data(X, T, E)
         T = np.maximum(T, 1e-6)
         self.get_times(T, is_min_time_zero, extra_pct_time)
@@ -243,13 +247,16 @@ class BaseParametricModel(BaseModel):
             init_alpha = 1000.
 
         # Initializing the model
-        model = nn.ParametricNet(input_shape, init_method, init_alpha, 
+        model = nn.ParametricNet(input_shape, init_method, self.num_event_types, init_alpha, 
             is_beta_used)
 
         # Trasnforming the inputs into tensors
         X = torch.FloatTensor(X)
         T = torch.FloatTensor(T.reshape(-1, 1))
-        E = torch.FloatTensor(E.reshape(-1, 1))
+        new_E = np.zeros((E.shape[0], self.num_event_types), dtype=np.float64)
+        for event in range(self.num_event_types):
+            new_E[:,event] = [1 if e == event + 1 else 0 for e in E]
+        E = torch.FloatTensor(new_E)
 
         # Performing order 1 optimization
         model, loss_values = opt.optimize(self.loss_function, model, optimizer, 
@@ -299,7 +306,11 @@ class BaseParametricModel(BaseModel):
             
         # Calculating hazard, density, Survival
         hazard, Survival = self.get_hazard_survival(self.model, x, times)
-        density = hazard*Survival
+        density = torch.FloatTensor(np.zeros((hazard.shape[0], self.num_event_types * len(times)), dtype=np.float64))
+        for event in range(self.num_event_types):
+            lower_lim = len(times) * event
+            upper_lim = len(times) * (event + 1)
+            density[:, lower_lim : upper_lim] = (hazard[:, lower_lim : upper_lim] * Survival)
 
         # Transforming into numpy objects
         hazard = hazard.data.numpy()
@@ -312,7 +323,7 @@ class BaseParametricModel(BaseModel):
         else:
             min_abs_value = [abs(a_j_1-t) for (a_j_1, a_j) in self.time_buckets]
             index = np.argmin(min_abs_value)
-            return hazard[:, index], density[:, index], Survival[:, index]
+            return hazard[:, [len(times) * event + index for event in self.num_event_types]], density[:, [len(times) * event + index for event in self.num_event_types]], Survival[:, [len(times) * event + index for event in self.num_event_types]]
 
 
 
@@ -334,11 +345,20 @@ class ExponentialModel(BaseParametricModel):
         """ Computing the hazard and Survival functions. """
         
         # Computing the score
-        score  = model(x).reshape(-1, 1)
+        score  = model(x)
+        num_times = 1 if t.shape[0] == x.shape[0] and t.shape[1] == 1 else len(t)
 
         # Computing hazard and Survival
-        hazard   = score
-        Survival = torch.exp(-hazard*t)   
+        hazard = score
+        hazard = torch.FloatTensor(np.zeros((hazard.shape[0], self.num_event_types * num_times), dtype=np.float64))
+        for event in range(self.num_event_types):
+            hazard[:, event * num_times : (event + 1) * num_times] = score[:, event].unsqueeze(1).t().repeat(num_times, 1).t()
+
+        score_summation = torch.FloatTensor(np.zeros((hazard.shape[0], num_times), dtype=np.float64))
+        for event in range(self.num_event_types):
+            score_summation -= hazard[:,  event * num_times : (event + 1) * num_times]*t
+
+        Survival = torch.exp(score_summation)
             
         return hazard, Survival
 
@@ -360,14 +380,22 @@ class WeibullModel(BaseParametricModel):
         """ Computing the hazard and Survival functions. """
         
         # Computing the score
-        score  = model(x).reshape(-1, 1)
+        score  = model(x)
+        num_times = 1 if t.shape[0] == x.shape[0] and t.shape[1] == 1 else len(t)
 
         # Extracting beta
         beta = list(model.parameters())[-1]
 
         # Computing hazard and Survival
-        hazard   = beta*score*torch.pow(t, beta-1) 
-        Survival = torch.exp(- score*torch.pow(t, beta) )  
+        hazard = torch.FloatTensor(np.zeros((score.shape[0], num_times * self.num_event_types), dtype=np.float64))
+        for event in range(self.num_event_types):
+            hazard[:, num_times*event : num_times * (event + 1)] = beta[event]*score[:, event].reshape(-1,1)*torch.pow(t, beta[event]-1) 
+
+        score_summation = torch.FloatTensor(np.zeros((hazard.shape[0], num_times), dtype=np.float64))
+        for event in range(self.num_event_types):
+            score_summation -= score[:, event].reshape(-1,1)*torch.pow(t, beta[event])
+
+        Survival = torch.exp(score_summation)
         
         return hazard, Survival
 
@@ -387,16 +415,25 @@ class GompertzModel(BaseParametricModel):
     def get_hazard_survival(self, model, x, t):
         """ Computing the hazard and Survival functions. """
         
+        num_times = 1 if t.shape[0] == x.shape[0] and t.shape[1] == 1 else len(t)
+
         # Computing the score
-        score  = model(x).reshape(-1, 1)
+        score  = model(x)
 
         # Extracting beta
         beta = list(model.parameters())[-1]
 
         # Computing hazard and Survival
-        hazard   = score*torch.exp(beta*t)
-        Survival = torch.exp(-score/beta*(torch.exp(beta*t)-1) )
-        
+        hazard = torch.FloatTensor(np.zeros((score.shape[0], num_times * self.num_event_types), dtype=np.float64))
+        for event in range(self.num_event_types):
+            hazard[:, num_times*event : num_times * (event + 1)] = score[:, event].reshape(-1,1)*torch.exp(beta[event] * t) 
+
+        score_summation = torch.FloatTensor(np.zeros((hazard.shape[0], num_times), dtype=np.float64))
+        for event in range(self.num_event_types):
+            score_summation -= score[:, event].reshape(-1,1)/beta[event]*torch.exp((beta[event] * t) - 1)
+
+        Survival = torch.exp(score_summation)
+
         return hazard, Survival
     
 
