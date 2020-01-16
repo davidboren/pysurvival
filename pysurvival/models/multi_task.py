@@ -166,14 +166,13 @@ class BaseMultiTaskModel(BaseModel):
         """
         score = model(X)
         loss = 0
-        phis = []
+        phi = torch.FloatTensor(np.zeros((score.shape[0], (self.num_times + 1) * self.num_event_types), dtype=np.float64))
         for i in range(self.num_event_types):
             subScore = score[:, (self.num_times * i) : ((self.num_times) * (i + 1))]
-            phis.append(torch.exp(torch.mm(subScore, Triangle)))
+            phi[:, (self.num_times + 1) * i : (self.num_times + 1) * (i + 1)] = torch.exp(torch.mm(subScore, Triangle))
 
-        phi = torch.cat(phis, 1)
         phi_reduced = torch.sum(phi * Y, dim = 1)
-        norm = torch.matmul(phi, Ones)
+        norm = torch.sum(phi, dim = 1)
         loss = - torch.sum(torch.log(phi_reduced)) + torch.sum(norm)
 
         # Adding the regularized loss
