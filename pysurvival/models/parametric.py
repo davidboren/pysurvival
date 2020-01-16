@@ -98,7 +98,7 @@ class BaseParametricModel(BaseModel):
     
     def fit(self, X, T, E, init_method = 'glorot_uniform', optimizer ='adam', 
             lr = 1e-4, num_epochs = 1000, l2_reg=1e-2, verbose=True, 
-            is_min_time_zero = True, extra_pct_time = 0.1):
+            is_min_time_zero = True, extra_pct_time = 0.1, clip_value=None):
         """ 
         Fit the estimator based on the given parameters.
 
@@ -260,7 +260,7 @@ class BaseParametricModel(BaseModel):
 
         # Performing order 1 optimization
         model, loss_values = opt.optimize(self.loss_function, model, optimizer, 
-            lr, num_epochs, verbose,  X=X, T=T, E=E, l2_reg=l2_reg)
+                                          lr, num_epochs, verbose,  X=X, T=T, E=E, l2_reg=l2_reg, clip_value=clip_value)
         
         # Saving attributes
         self.model = model.eval()
@@ -430,7 +430,7 @@ class GompertzModel(BaseParametricModel):
 
         score_summation = torch.FloatTensor(np.zeros((hazard.shape[0], num_times), dtype=np.float64))
         for event in range(self.num_event_types):
-            score_summation -= score[:, event].reshape(-1,1)/beta[event]*torch.exp((beta[event] * t) - 1)
+            score_summation -= score[:, event].reshape(-1,1)/beta[event]*torch.exp((beta[event] * t))
 
         Survival = torch.exp(score_summation)
 
@@ -454,16 +454,24 @@ class LogLogisticModel(BaseParametricModel):
         """ Computing the hazard and Survival functions. """
         
         # Computing the score
-        score  = model(x).reshape(-1, 1)
+        score  = model(x)
+
+        num_times = 1 if t.shape[0] == x.shape[0] and t.shape[1] == 1 else len(t)
 
         # Extracting beta
         beta = list(model.parameters())[-1]
 
+        Survival = torch.FloatTensor(np.ones((score.shape[0], num_times), dtype=np.float64))
+        for event in range(self.num_event_types):
+            subScore = score[:, event].reshape(-1,1)
+            Survival *= 1 / (1 + score[:, event].reshape(-1,1)*torch.pow(t, beta[event]))
+
         # Computing hazard and Survival
-        hazard  = score*beta*torch.pow(t, beta-1)
-        hazard  = hazard/(1 + score*torch.pow(t, beta) )
-        Survival = 1./(1. + torch.pow(score*t, beta) ) 
-        
+        hazard = torch.FloatTensor(np.zeros((score.shape[0], num_times * self.num_event_types), dtype=np.float64))
+        for event in range(self.num_event_types):
+            subScore = score[:, event].reshape(-1,1)
+            hazard[:, num_times*event : num_times * (event + 1)] = subScore*beta[event]*torch.pow(t, beta[event] - 1)  / (1 + subScore*torch.pow(t, beta[event])) ** 2 / Survival
+
         return hazard, Survival
 
 

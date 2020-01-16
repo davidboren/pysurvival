@@ -97,7 +97,7 @@ def initialization(init_method, W, is_tensor=True):
 
 
 def optimize(loss_function, model, optimizer_str, lr=1e-4, nb_epochs=1000, 
-               verbose = True, num_workers = 0, **kargs):
+               verbose = True, num_workers = 0, clip_value=None, **kargs):
     """ 
     Providing the schema of the iterative method for optimizing a 
     differentiable objective function for models that use gradient centric
@@ -182,6 +182,9 @@ def optimize(loss_function, model, optimizer_str, lr=1e-4, nb_epochs=1000,
             loss = loss_function(model, **kargs)
             loss.backward()
             return loss
+
+        if clip_value is not None:
+            nn.utils.clip_grad_value_(model.parameters(), clip_value)
 
         if 'lbfgs' in optimizer_str.lower() :
             optimizer.step(closure)
