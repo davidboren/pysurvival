@@ -173,7 +173,7 @@ class BaseMultiTaskModel(BaseModel):
 
         phi_reduced = torch.sum(phi * Y, dim = 1)
         norm = torch.sum(phi, dim = 1)
-        loss = - torch.sum(torch.log(phi_reduced)) + torch.sum(norm)
+        loss = - torch.sum(torch.log(phi_reduced)) + torch.sum(torch.log(norm))
 
         # Adding the regularized loss
         nb_set_parameters = len(list(model.parameters()))
@@ -435,7 +435,6 @@ class BaseMultiTaskModel(BaseModel):
 
         for i in range(self.num_event_types):
             subDensity = density[:, ((self.num_times + 1) * i) : ((self.num_times + 1) * (i + 1))]
-            Incidence = np.matmul(subDensity, np.triu(np.ones((self.num_times + 1, self.num_times + 1 ), dtype=np.float64) ))
             hazard[:, ((self.num_times + 1) * i) : ((self.num_times + 1) * (i + 1))] = subDensity/survival
             
 
