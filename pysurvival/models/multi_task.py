@@ -147,9 +147,8 @@ class BaseMultiTaskModel(BaseModel):
         # Transform into torch.Tensor
         X = torch.FloatTensor(X)
         Y = torch.FloatTensor(Y)
-        Ones = torch.FloatTensor(np.ones(((self.num_event_types) * (self.num_times + 1), 1)))
 
-        return X, Y, Ones
+        return X, Y
 
     def get_Y_Universe(self):
         return np.concatenate(
@@ -160,7 +159,7 @@ class BaseMultiTaskModel(BaseModel):
             0
         )
 
-    def loss_function(self, model, X, Y, Triangle, Ones, l2_reg, l2_smooth):
+    def loss_function(self, model, X, Y, Triangle, l2_reg, l2_smooth):
         """ Computes the loss function of the any MTLR model. 
             All the operations have been vectorized to ensure optimal speed
         """
@@ -344,7 +343,7 @@ class BaseMultiTaskModel(BaseModel):
             X = self.scaler.fit_transform( X ) 
 
         # Building the time axis, time buckets and output Y
-        X, Y, Ones = self.compute_XY(X, T, E, is_min_time_zero, extra_pct_time)
+        X, Y = self.compute_XY(X, T, E, is_min_time_zero, extra_pct_time)
 
         # Initializing the model
         model = nn.NeuralNet(input_shape, (self.num_times) * self.num_event_types, self.structure, 
@@ -365,7 +364,7 @@ class BaseMultiTaskModel(BaseModel):
         model, loss_values = opt.optimize(self.loss_function, model, optimizer, 
             lr, num_epochs, verbose,  X=X, 
             Y=Y, Triangle=Triangle, 
-            l2_reg=l2_reg, l2_smooth=l2_smooth, Ones=Ones)
+            l2_reg=l2_reg, l2_smooth=l2_smooth)
 
         # Saving attributes
         self.model = model.eval()
