@@ -114,6 +114,23 @@ class BaseMultiTaskModel(BaseModel):
         self.get_time_buckets()
         self.num_times = len(self.time_buckets)
 
+    def compute_Y(self, T, E):
+        # Initializing the output variable
+        Y = []
+
+        # Building the output variable
+        for i, (t, e) in enumerate(zip(T, E)):
+            y = np.zeros((self.num_event_types) * (self.num_times + 1))
+            min_abs_value = [abs(a_j_1 - t) for (a_j_1, a_j) in self.time_buckets]
+            index = np.argmin(min_abs_value)
+            if e != 0:
+                y[int((self.num_times + 1) * (e - 1) + index)] = 1.0
+            else:
+                for se in range(self.num_event_types):
+                    y[se * (self.num_times + 1) + index: (se + 1) * (self.num_times + 1)] = 1.0
+            Y.append(y)
+        Y = torch.FloatTensor(Y)
+        return Y
 
     def compute_XY(self, X, T, E, is_min_time_zero, extra_pct_time):
         """ Given the survival_times, events and time_points vectors, 
@@ -133,26 +150,10 @@ class BaseMultiTaskModel(BaseModel):
         self.get_times(T, is_min_time_zero, extra_pct_time)
         n_units = T.shape[0]
 
-        # Initializing the output variable
-        Y = []
-
-        # Building the output variable
-        for i, (t, e) in enumerate(zip(T, E)):
-            y = np.zeros((self.num_event_types) * (self.num_times + 1))
-            min_abs_value = [abs(a_j_1 - t) for (a_j_1, a_j) in self.time_buckets]
-            index = np.argmin(min_abs_value)
-            if e != 0:
-                y[int((self.num_times + 1) * (e - 1) + index)] = 1.0
-            else:
-                for se in range(self.num_event_types):
-                    y[se * (self.num_times + 1) + index: (se + 1) * (self.num_times + 1)] = 1.0
-            Y.append(y)
-
         # Transform into torch.Tensor
         X = torch.FloatTensor(X)
-        Y = torch.FloatTensor(Y)
 
-        return X, Y
+        return X, self.compute_Y(T, E)
 
     def get_Y_Universe(self):
         return np.concatenate(
@@ -162,6 +163,26 @@ class BaseMultiTaskModel(BaseModel):
             ],
             0
         )
+
+    def density_to_loss(self, density, T, E, l2_reg, l2_smooth):
+        """ Computes the loss function of the any MTLR model. 
+            All the operations have been vectorized to ensure optimal speed
+        """
+        Y = self.compute_Y(T, E).numpy()
+        loss = - np.sum(np.log(np.sum(density * Y, axis=1)))
+                
+        return loss + self.get_l2_loss(self.model, l2_reg, l2_smooth)
+
+    def get_l2_loss(self, model, l2_reg, l2_smooth):
+        # Adding the regularized loss
+        nb_set_parameters = len(list(model.parameters()))
+        loss = 0
+        for i, w in enumerate(model.parameters()):
+            loss += l2_reg*torch.sum(w*w)/2.
+            
+            if i >= nb_set_parameters - 2:
+                loss += l2_smooth*norm_diff(w)
+        return loss
 
     def loss_function(self, model, X, Y, Triangle, l2_reg, l2_smooth):
         """ Computes the loss function of the any MTLR model. 
@@ -177,16 +198,8 @@ class BaseMultiTaskModel(BaseModel):
         phi_reduced = torch.sum(phi * Y, dim = 1)
         norm = torch.sum(phi, dim = 1)
         loss = - torch.sum(torch.log(phi_reduced)) + torch.sum(torch.log(norm))
-
-        # Adding the regularized loss
-        nb_set_parameters = len(list(model.parameters()))
-        for i, w in enumerate(model.parameters()):
-            loss += l2_reg*torch.sum(w*w)/2.
-            
-            if i >= nb_set_parameters - 2:
-                loss += l2_smooth*norm_diff(w)
                 
-        return loss
+        return loss + self.get_l2_loss(model, l2_reg, l2_smooth)
 
 
     def fit(self, X, T, E, init_method = 'glorot_uniform', optimizer ='adam', 
@@ -419,11 +432,8 @@ class BaseMultiTaskModel(BaseModel):
         Triangle1 = np.tri(self.num_times, self.num_times + 1 )
         Triangle2 = np.tri(self.num_times + 1, self.num_times + 1 )
 
-        # A Score for a given time-bucket and outcome is comprised of the scores for that time bucket as well as
-        # the censoring scores for all other time buckets
         Y_Universe = self.get_Y_Universe()
         phi = np.zeros((score.shape[0], self.num_event_types * (self.num_times + 1)))
-        incidence = np.zeros((score.shape[0], self.num_event_types * (self.num_times + 1)))
         hazard = np.zeros((score.shape[0], self.num_event_types * (self.num_times + 1)))
         survival = np.ones((score.shape[0], self.num_times + 1))
             
@@ -438,7 +448,7 @@ class BaseMultiTaskModel(BaseModel):
 
         for i in range(self.num_event_types):
             subDensity = density[:, ((self.num_times + 1) * i) : ((self.num_times + 1) * (i + 1))]
-            hazard[:, ((self.num_times + 1) * i) : ((self.num_times + 1) * (i + 1))] = subDensity/survival
+            hazard[:, ((self.num_times + 1) * i) : ((self.num_times + 1) * (i + 1))] = subDensity / survival
             
 
         # Returning the full functions of just one time point
