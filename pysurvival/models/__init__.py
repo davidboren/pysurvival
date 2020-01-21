@@ -17,7 +17,7 @@ class BaseModel(object):
         its own.
     """
 
-    def __init__(self, auto_scaler=True):
+    def __init__(self, auto_scaler=True, times=None):
         
         # Creating a scikit-learner scaler
         self.auto_scaler = auto_scaler
@@ -27,7 +27,7 @@ class BaseModel(object):
             self.scaler = None
         
         # Creating a place holder for the time axis
-        self.times = [0.]
+        self.times = [0.] if times is None else times
 
         # Creating the model's name
         self.__repr__()

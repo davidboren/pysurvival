@@ -28,14 +28,14 @@ class BaseParametricModel(BaseModel):
             Determines whether a sklearn scaler should be automatically applied
     """
 
-    def __init__(self, bins = 100, auto_scaler=True):
+    def __init__(self, bins = 100, auto_scaler=True, times=None):
             
         # Saving the attributes
         self.loss_values = []
         self.bins = bins
 
         # Initializing the elements from BaseModel
-        super(BaseParametricModel, self).__init__(auto_scaler)
+        super(BaseParametricModel, self).__init__(auto_scaler, times=times)
         
     
     def get_hazard_survival(self, model, x, t):
@@ -61,7 +61,10 @@ class BaseParametricModel(BaseModel):
             raise Exception("extra_pct_time has to be between [0, 1].") 
 
         # Building time points and time buckets
-        self.times = np.linspace(min_time, max_time*(1. + p), self.bins)
+        if self.times is None or len(self.times) == 1:
+            self.times = np.linspace(min_time, max_time*(1. + p), self.bins)
+        else:
+            self.times = np.array(self.times + [max(self.times) * (1. + p)])
         self.get_time_buckets()
         self.nb_times = len(self.time_buckets)
 

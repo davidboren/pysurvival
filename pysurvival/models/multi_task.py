@@ -76,7 +76,7 @@ class BaseMultiTaskModel(BaseModel):
         Determines whether a sklearn scaler should be automatically applied
     """
 
-    def __init__(self, structure, bins = 100, auto_scaler=True):
+    def __init__(self, structure, bins = 100, auto_scaler=True, times=None):
 
         # Saving the attributes
         self.loss_values = []
@@ -84,7 +84,7 @@ class BaseMultiTaskModel(BaseModel):
         self.structure = structure
 
         # Initializing the elements from BaseModel
-        super(BaseMultiTaskModel, self).__init__(auto_scaler)
+        super(BaseMultiTaskModel, self).__init__(auto_scaler, times=times)
         
         
     def get_times(self, T, is_min_time_zero = True, extra_pct_time = 0.1):
@@ -106,7 +106,11 @@ class BaseMultiTaskModel(BaseModel):
             raise Exception("extra_pct_time has to be between [0, 1].") 
 
         # Building time points and time buckets
-        self.times = np.linspace(min_time, max_time*(1. + p), self.bins)
+        if self.times is None or len(self.times) == 1:
+            self.times = np.linspace(min_time, max_time*(1. + p), self.bins)
+        else:
+            self.times = np.array(self.times + [max(self.times) * (1. + p)])
+
         self.get_time_buckets()
         self.num_times = len(self.time_buckets)
 
@@ -188,7 +192,7 @@ class BaseMultiTaskModel(BaseModel):
     def fit(self, X, T, E, init_method = 'glorot_uniform', optimizer ='adam', 
             lr = 1e-4, num_epochs = 1000, dropout = 0.2, l2_reg=1e-2, 
             l2_smooth=1e-2, batch_normalization=False, bn_and_dropout=False,
-            verbose=True, extra_pct_time = 0.1, is_min_time_zero=True):
+            verbose=True, extra_pct_time = 0.1, is_min_time_zero=True, clip_value=None):
         """ Fit the estimator based on the given parameters.
 
         Parameters:
@@ -364,7 +368,7 @@ class BaseMultiTaskModel(BaseModel):
         model, loss_values = opt.optimize(self.loss_function, model, optimizer, 
             lr, num_epochs, verbose,  X=X, 
             Y=Y, Triangle=Triangle, 
-            l2_reg=l2_reg, l2_smooth=l2_smooth)
+                                          l2_reg=l2_reg, l2_smooth=l2_smooth, clip_value=clip_value)
 
         # Saving attributes
         self.model = model.eval()
@@ -570,14 +574,14 @@ class NeuralMultiTaskModel(BaseMultiTaskModel):
         Determines whether a sklearn scaler should be automatically applied
     """
     
-    def __init__(self, structure, bins = 100, auto_scaler = True):
+    def __init__(self, structure, bins = 100, auto_scaler = True, **kwargs):
 
         # Checking the validity of structure
         structure = nn.check_mlp_structure(structure)
 
         # Initializing the instance
         super(NeuralMultiTaskModel, self).__init__(
-            structure = structure, bins = bins, auto_scaler = auto_scaler)
+            structure = structure, bins = bins, auto_scaler = auto_scaler, **kwargs)
     
     
     def __repr__(self):
