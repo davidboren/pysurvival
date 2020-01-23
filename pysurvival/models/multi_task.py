@@ -171,7 +171,7 @@ class BaseMultiTaskModel(BaseModel):
         Y = self.compute_Y(T, E).numpy()
         loss = - np.sum(np.log(np.sum(density * Y, axis=1)))
                 
-        return loss + self.get_l2_loss(self.model, l2_reg, l2_smooth)
+        return (loss + self.get_l2_loss(self.model, l2_reg, l2_smooth).detach().numpy())
 
     def get_l2_loss(self, model, l2_reg, l2_smooth):
         # Adding the regularized loss
