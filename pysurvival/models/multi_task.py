@@ -197,7 +197,7 @@ class BaseMultiTaskModel(BaseModel):
 
         phi_reduced = torch.sum(phi * Y, dim = 1)
         norm = torch.sum(phi, dim = 1)
-        loss = - torch.sum(torch.log(weights * phi_reduced)) + torch.sum(torch.log(norm))
+        loss = - torch.sum(weights * torch.log(phi_reduced)) + torch.sum(weights * torch.log(norm))
                 
         return loss + self.get_l2_loss(model, l2_reg, l2_smooth)
 
@@ -205,7 +205,7 @@ class BaseMultiTaskModel(BaseModel):
     def fit(self, X, T, E, init_method = 'glorot_uniform', optimizer ='adam', 
             lr = 1e-4, num_epochs = 1000, dropout = 0.2, l2_reg=1e-2, 
             l2_smooth=1e-2, batch_normalization=False, bn_and_dropout=False,
-            verbose=True, extra_pct_time = 0.1, is_min_time_zero=True, clip_value=None, weights=None):
+            verbose=True, extra_pct_time = 0.1, is_min_time_zero=True, clip_value=None, sample_weight=None):
         """ Fit the estimator based on the given parameters.
 
         Parameters:
@@ -355,12 +355,11 @@ class BaseMultiTaskModel(BaseModel):
         nb_units, self.num_vars = X.shape
         input_shape = self.num_vars
 
-        if weights is None:
+        if sample_weight is None:
             weights = np.ones(X.shape[0])
         else:
-            weights = np.array(weights)
-
-        weights = torch.FloatTensor(weights / np.sum(weights))
+            weights = np.array(sample_weight)
+        weights = torch.FloatTensor(weights)
     
         # Scaling data 
         if self.auto_scaler:
