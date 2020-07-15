@@ -121,7 +121,7 @@ class BaseMultiTaskModel(BaseModel):
         # Building the output variable
         for i, (t, e) in enumerate(zip(T, E)):
             y = np.zeros((self.num_event_types) * (self.num_times + 1))
-            min_abs_value = [abs(a_j_1 - t) for (a_j_1, a_j) in self.time_buckets]
+            min_abs_value = [abs((a_j_1 + a_j) / 2 - t) for (a_j_1, a_j) in self.time_buckets]
             index = np.argmin(min_abs_value)
             if e != 0:
                 y[int((self.num_times + 1) * (e - 1) + index)] = 1.0
