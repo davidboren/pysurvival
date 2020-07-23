@@ -391,7 +391,16 @@ class BaseMultiTaskModel(BaseModel):
 
         # Saving attributes
         self.model = model.eval()
-        self.loss_values = loss_values
+        self.loss_values = loss_values + [float(
+            self.loss_function(
+                model=model,
+                X=X,
+                Y=Y,
+                Triangle=Triangle,
+                weights=weights,
+                l2_reg=l2_reg,
+                l2_smooth=l2_smooth).detach().numpy()
+        )]
 
         return self
     
@@ -436,7 +445,6 @@ class BaseMultiTaskModel(BaseModel):
 
         # Calculating the score, density, hazard and Survival
         Triangle1 = np.tri(self.num_times, self.num_times + 1 )
-        Triangle2 = np.tri(self.num_times + 1, self.num_times + 1 )
 
         Y_Universe = self.get_Y_Universe()
         phi = np.zeros((score.shape[0], self.num_event_types * (self.num_times + 1)))
